@@ -4,6 +4,7 @@ from openai import OpenAI
 from pinecone import Pinecone
 from dotenv import load_dotenv
 import os
+import sqlite3
 
 load_dotenv()
 app = Flask(__name__)
@@ -19,14 +20,30 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index(PINECONE_INDEX_NAME)
 
-# Temporary storage (can later be replaced with database)
-chats = []
+# ==== DATABASE SETUP ====
+def init_db():
+    conn = sqlite3.connect("chats.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            phone TEXT,
+            page TEXT,
+            chat TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+init_db()
+
+# ==== HOME ====
 @app.route("/")
 def home():
-    return "✅ Chatbot API is running successfully!"
+    return "✅ Chatbot API is running successfully with SQLite storage!"
 
-# ==== MAIN CHAT ROUTE ====
+# ==== CHAT ROUTE ====
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json()
@@ -35,19 +52,14 @@ def chat():
     if not question:
         return jsonify({"error": "No question provided"}), 400
 
-    # 1️⃣ Create embedding for the question
     q_embed = client.embeddings.create(
         model="text-embedding-3-small",
         input=question
     ).data[0].embedding
 
-    # 2️⃣ Search Pinecone
     results = index.query(vector=q_embed, top_k=3, include_metadata=True)
-
-    # 3️⃣ Build context from website data
     context = "\n".join([m.metadata["text"] for m in results.matches])
 
-    # 4️⃣ Ask GPT
     prompt = f"""
     You are a helpful assistant that answers only using the following website data:
     {context}
@@ -63,8 +75,7 @@ def chat():
     answer = completion.choices[0].message.content.strip()
     return jsonify({"answer": answer})
 
-
-# ==== SAVE CHAT (USER DETAILS + CHAT LOG) ====
+# ==== SAVE CHAT ====
 @app.route("/save-chat", methods=["POST"])
 def save_chat():
     data = request.get_json()
@@ -76,13 +87,24 @@ def save_chat():
     if not all([name, phone, chat, page]):
         return jsonify({"error": "Missing required fields"}), 400
 
-    chats.append({"name": name, "phone": phone, "chat": chat, "page": page})
+    conn = sqlite3.connect("chats.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO chats (name, phone, page, chat) VALUES (?, ?, ?, ?)",
+                   (name, phone, page, chat))
+    conn.commit()
+    conn.close()
+
     return jsonify({"message": "Chat saved successfully!"})
 
-
-# ==== DASHBOARD TO VIEW CHATS z====
+# ==== DASHBOARD ====
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
+    conn = sqlite3.connect("chats.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, phone, page, chat FROM chats ORDER BY id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+
     html = """
     <h2>💬 Chatbot Dashboard</h2>
     <table border='1' cellpadding='8' cellspacing='0'>
@@ -93,18 +115,17 @@ def dashboard():
         <th>Chat</th>
     </tr>
     """
-    for c in chats:
+    for name, phone, page, chat in rows:
         html += f"""
         <tr>
-            <td>{c['name']}</td>
-            <td>{c['phone']}</td>
-            <td><a href='{c['page']}' target='_blank'>Open Page</a></td>
-            <td style='white-space: pre-wrap;'>{c['chat']}</td>
+            <td>{name}</td>
+            <td>{phone}</td>
+            <td><a href='{page}' target='_blank'>Open Page</a></td>
+            <td style='white-space: pre-wrap;'>{chat}</td>
         </tr>
         """
     html += "</table>"
     return html
-  
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
