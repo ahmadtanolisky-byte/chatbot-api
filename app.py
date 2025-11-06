@@ -9,7 +9,7 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from openai import OpenAI
+from openai import OpenAI 
 from pinecone import Pinecone
 from dotenv import load_dotenv
 
@@ -38,7 +38,11 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGIN}})
 
 db = SQLAlchemy(app)
-limiter = Limiter(app, key_func=get_remote_address, default_limits=[RATE_LIMIT])
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[RATE_LIMIT],
+)
+limiter.init_app(app)
 
 # ---------- OpenAI & Pinecone Clients ----------
 client = OpenAI(api_key=OPENAI_API_KEY)
