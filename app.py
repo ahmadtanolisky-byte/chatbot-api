@@ -80,7 +80,7 @@ def save_chat():
     return jsonify({"message": "Chat saved successfully!"})
 
 
-# ==== DASHBOARD TO VIEW CHATS ====
+# ==== DASHBOARD TO VIEW CHATS z====
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     html = """
@@ -104,7 +104,7 @@ def dashboard():
         """
     html += "</table>"
     return html
-
+  
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
