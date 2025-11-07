@@ -1,28 +1,42 @@
-# app.py
-from flask import jsonify, request
-from config import app, db, limiter, client, index, PORT, TOP_K, CONTEXT_MESSAGES, MAX_CONTEXT_CHARS, RATE_LIMIT, logger
-from models import Session, Message
-from utils import save_message, get_recent_messages, trim_context_text, require_basic_auth
+# app.py - production-ready chatbot backend
+
+import os
 import datetime
-from routes import *
+import logging
+from flask import Flask, jsonify
 from flask_cors import CORS
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 
+# ==== SETUP ====
+app = Flask(__name__)
+CORS(app)
 
-SYSTEM_PROMPT = (
-    "You are a helpful assistant for the Faisal Town / Sky Marketing website. "
-    "Answer using only the provided website content and conversation context. "
-    "If unsure, reply politely and suggest contacting the sales team."
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s]: %(message)s",
+    handlers=[logging.StreamHandler()]
 )
+logger = logging.getLogger(__name__)
 
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"status": "ok", "message": "Chatbot API running"})
+# ==== ERROR HANDLER ====
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Ensure all errors return JSON instead of HTML."""
+    logger.exception("Unhandled exception:")
+    return jsonify({"error": "internal_server_error", "message": str(e)}), 500
 
-# ... Copy your /session, /chat, /save-chat, /admin endpoints here unchanged ...
-# You can also move them into routes.py if you want.
 
+# ==== IMPORT CONFIG, ROUTES ====
+from config import limiter
+limiter.init_app(app)
+import routes  # noqa: E402 (import after app is created)
+
+# ==== MAIN ====
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
-    app.run(host="0.0.0.0", port=PORT)
+    port = int(os.getenv("PORT", 5000))
+    logger.info(f"✅ Starting Flask app on port {port}")
+    app.run(host="0.0.0.0", port=port)
