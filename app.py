@@ -175,10 +175,24 @@ def chat():
             answer = f"👋 Hello {name}! How can I help you today? Ask me about plots, payment plans, or booking info."
             save_message(session_id, "assistant", answer)
             return jsonify({"answer": answer})
+        
+        last_msgs = get_recent_messages(session_id, limit=3)
+        recent_text = " ".join(m["content"].lower() for m in last_msgs)
+
+        # If user asks generic things like "payment plan" or "map"
+        if question.lower() in ["payment plan", "map", "location", "plots", "details"]:
+            # Try to find a block name in the recent context
+            for block in ["n block", "a block", "b block", "faisal town", "phase 2"]:
+                if block in recent_text:
+                    question = f"{question} {block}"
+                    break
+
 
         # 1) create embedding
         try:
-            embed_resp = client.embeddings.create(model="text-embedding-3-small", input=question)
+            recent_messages = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
+            context_query = " ".join([m["content"] for m in recent_messages if m["role"] == "user"][-3:]) + " " + question
+            embed_resp = client.embeddings.create(model="text-embedding-3-small", input=context_query)
             q_embed = embed_resp.data[0].embedding
         except Exception as e:
             print("❌ OpenAI embedding error:", e)
