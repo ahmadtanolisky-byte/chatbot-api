@@ -1,18 +1,24 @@
-# app.py - production-ready chatbot backend
+# app.py - production-ready chatbot backend (improved)
 import os
 import datetime
+import logging
 from functools import wraps
+from typing import List
 
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from openai import OpenAI
-from pinecone import Pinecone
 from dotenv import load_dotenv
 
-# Load environment
+# OpenAI (official python client modern usage)
+from openai import OpenAI
+
+# Pinecone (use official pinecone-client import)
+import pinecone
+
+# Load environment variables from .env
 load_dotenv()
 
 # ---------- Configuration (from env) ----------
@@ -20,6 +26,7 @@ PORT = int(os.getenv("PORT", 5000))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")  # optional
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chats.db")  # replace with Postgres URL in production
 ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
@@ -27,10 +34,18 @@ ADMIN_PASS = os.getenv("ADMIN_PASS", "changeme")
 TOP_K = int(os.getenv("TOP_K", 8))  # increased recall
 CONTEXT_MESSAGES = int(os.getenv("CONTEXT_MESSAGES", 6))
 RATE_LIMIT = os.getenv("RATE_LIMIT", "60 per minute")
+MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", 3500))  # trim long contexts
+SHORT_QUERY_WORDS = int(os.getenv("SHORT_QUERY_WORDS", 4))  # treat queries shorter than this as 'short'
 
 # Validate required env vars
-if not OPENAI_API_KEY or not PINECONE_API_KEY or not PINECONE_INDEX_NAME:
-    raise RuntimeError("Please set OPENAI_API_KEY, PINECONE_API_KEY and PINECONE_INDEX_NAME in environment")
+if not OPENAI_API_KEY:
+    raise RuntimeError("Please set OPENAI_API_KEY in environment")
+if not PINECONE_API_KEY or not PINECONE_INDEX_NAME:
+    raise RuntimeError("Please set PINECONE_API_KEY and PINECONE_INDEX_NAME in environment")
+
+# ---------- Logging ----------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("chatbot")
 
 # ---------- Flask + Extensions ----------
 app = Flask(__name__)
@@ -47,15 +62,21 @@ limiter.init_app(app)
 # ---------- OpenAI & Pinecone clients ----------
 try:
     client = OpenAI(api_key=OPENAI_API_KEY)
+    logger.info("OpenAI client initialized")
 except Exception as e:
-    print("❌ OpenAI init error:", e)
+    logger.exception("❌ OpenAI init error:")
     raise
 
 try:
-    pc = Pinecone(api_key=PINECONE_API_KEY)
-    index = pc.Index(PINECONE_INDEX_NAME)
+    # Initialize pinecone client correctly
+    if PINECONE_ENVIRONMENT:
+        pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+    else:
+        pinecone.init(api_key=PINECONE_API_KEY)
+    index = pinecone.Index(PINECONE_INDEX_NAME)
+    logger.info("Pinecone client initialized, index loaded: %s", PINECONE_INDEX_NAME)
 except Exception as e:
-    print("❌ Pinecone init error:", e)
+    logger.exception("❌ Pinecone init error:")
     raise
 
 # ---------- Database models ----------
@@ -92,27 +113,43 @@ def require_basic_auth(func):
 
 def save_message(session_id: str, role: str, content: str):
     try:
+        # don't store extremely long content blindly
+        if content and len(content) > 20000:
+            content = content[:20000] + "...(truncated)"
         m = Message(session_id=session_id, role=role, content=content)
         db.session.add(m)
         db.session.commit()
     except Exception as e:
-        # do not crash on DB write errors; log and continue
-        print("❌ Failed to save message:", e)
+        logger.exception("❌ Failed to save message:")
 
-def get_recent_messages(session_id: str, limit: int = CONTEXT_MESSAGES):
+def get_recent_messages(session_id: str, limit: int = CONTEXT_MESSAGES) -> List[dict]:
     msgs = Message.query.filter_by(session_id=session_id).order_by(Message.id.desc()).limit(limit).all()
+    # return in chronological order as chat format expects oldest -> newest
     return list(reversed([{"role": m.role, "content": m.content} for m in msgs]))
+
+def trim_context_text(text: str, max_chars: int = MAX_CONTEXT_CHARS) -> str:
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    # keep the last part (most recent)
+    return text[-max_chars:]
 
 # Strict but practical system prompt (tune as needed)
 SYSTEM_PROMPT = (
     "You are a helpful assistant for the Faisal Town / Sky Marketing website. "
-    "Answer using only the provided website content. If you cannot find a direct answer, reply: "
+    "Answer using only the provided website content and conversation context. "
+    "If you cannot find a direct answer, reply: "
     "'I'm sorry, I don't have that exact information yet. Would you like me to connect you with our sales team?' "
     "Keep answers short, factual, and reference source URLs when appropriate."
 )
 
-# ---------- Routes ----------
+GENERIC_SHORT_QUERIES = {"payment plan", "map", "location", "plots", "details", "price", "where", "on cash", "cash"}
 
+def is_short_query(q: str) -> bool:
+    return len(q.split()) < SHORT_QUERY_WORDS or q.lower() in GENERIC_SHORT_QUERIES
+
+# ---------- Routes ----------
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "ok", "message": "Chatbot API running"})
@@ -147,7 +184,7 @@ def start_session():
         db.session.commit()
         return jsonify({"message": "session started", "session_id": session_id})
     except Exception as e:
-        print("❌ /session error:", e)
+        logger.exception("❌ /session error:")
         return jsonify({"error": "server_error"}), 500
 
 # main chat endpoint
@@ -164,6 +201,9 @@ def chat():
         if not question:
             return jsonify({"error": "question required"}), 400
 
+        # Normalize whitespace
+        question = " ".join(question.split())
+
         # save user message
         save_message(session_id, "user", question)
 
@@ -175,66 +215,72 @@ def chat():
             answer = f"👋 Hello {name}! How can I help you today? Ask me about plots, payment plans, or booking info."
             save_message(session_id, "assistant", answer)
             return jsonify({"answer": answer})
-        
-        last_msgs = get_recent_messages(session_id, limit=3)
-        recent_text = " ".join(m["content"].lower() for m in last_msgs)
 
-        # If user asks generic things like "payment plan" or "map"
-        if question.lower() in ["payment plan", "map", "location", "plots", "details"]:
-            # Try to find a block name in the recent context
-            for block in ["n block", "a block", "b block", "faisal town", "phase 2"]:
+        # ---------- Context-aware enrichment ----------
+        # get last few messages and last few user messages
+        last_msgs = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
+        last_user_msgs = [m["content"] for m in last_msgs if m["role"] == "user"]
+
+        # try to detect previously mentioned block/area automatically for short/generic queries
+        recent_text = " ".join(m["content"].lower() for m in last_msgs)
+        # small list - you can extend with more blocks / project names
+        KNOWN_BLOCKS = ["n block", "a block", "b block", "faisal town", "phase 2", "phase ii", "phase 1", "central business district", "cbd"]
+
+        if question.lower() in GENERIC_SHORT_QUERIES or is_short_query(question):
+            for block in KNOWN_BLOCKS:
                 if block in recent_text:
+                    # append the most-likely block to the question (so retrieval improves)
                     question = f"{question} {block}"
+                    logger.debug("Enriched short question with context: %s", question)
                     break
 
-
-        # 1) create embedding
+        # ---------- 1) Create context-aware embedding ----------
         try:
-            # Combine recent user context with the current question
-            recent_msgs = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
-            context_text = " ".join([
-                m["content"] for m in recent_msgs
-                if m["role"] == "user"
-            ][-3:])  # last 3 user messages
+            # Build a short context string from recent user messages (most recent ones matter more)
+            context_text = " ".join(last_user_msgs[-3:])  # use last 3 user messages
+            context_text = trim_context_text(context_text, max_chars=MAX_CONTEXT_CHARS)
 
-            # If the user is asking something short, enrich it
-            if len(question.split()) < 4:  # e.g. "location", "on cash"
-                context_query = (context_text + " " + question).strip()
+            # If the question is short or ambiguous, combine with recent user context for embedding search
+            if is_short_query(question):
+                embedding_input = (context_text + " " + question).strip()
             else:
-                context_query = question
+                embedding_input = question
 
-            # Create embedding based on context-aware query
-            embed_resp = client.embeddings.create(
-                model="text-embedding-3-small",
-                input=context_query
-            )
+            # safety fallback
+            if not embedding_input:
+                embedding_input = question
+
+            embed_resp = client.embeddings.create(model="text-embedding-3-small", input=embedding_input)
             q_embed = embed_resp.data[0].embedding
-
         except Exception as e:
-            print("❌ OpenAI embedding error:", e)
+            logger.exception("❌ OpenAI embedding error:")
             return jsonify({"error": "embedding_error"}), 500
 
-        # 2) pinecone query
+        # ---------- 2) Pinecone query ----------
         try:
             results = index.query(vector=q_embed, top_k=TOP_K, include_metadata=True)
         except Exception as e:
-            print("❌ Pinecone query error:", e)
+            logger.exception("❌ Pinecone query error:")
             return jsonify({"error": "pinecone_error"}), 500
 
-        # 3) collect retrieved context + sources
+        # ---------- 3) collect retrieved context + sources ----------
         retrieved_texts = []
         sources = []
-        # handle different possible shapes of results
         matches = []
+        # results may be dict-like or object depending on client version
         if hasattr(results, "matches"):
             matches = results.matches or []
         elif isinstance(results, dict) and "matches" in results:
             matches = results["matches"] or []
 
         for m in matches:
-            metadata = getattr(m, "metadata", {}) or (m.get("metadata") if isinstance(m, dict) else {})
-            text = metadata.get("text") or metadata.get("content") or ""
-            url = metadata.get("url") or metadata.get("page") or ""
+            # metadata can be nested differently in various Pinecone setups; handle multiple shapes
+            metadata = getattr(m, "metadata", None) or (m.get("metadata") if isinstance(m, dict) else {}) or {}
+            text = metadata.get("text") or metadata.get("content") or metadata.get("page_text") or ""
+            url = metadata.get("url") or metadata.get("page") or metadata.get("source") or ""
+            if not text:
+                # sometimes the match object itself has a 'value' or 'payload'
+                text = getattr(m, "value", "") or (m.get("payload") if isinstance(m, dict) else "") or ""
             if text:
                 prefix = f"Source: {url}\n" if url else ""
                 retrieved_texts.append(f"{prefix}{text}")
@@ -243,22 +289,39 @@ def chat():
 
         context_block = "\n\n---\n\n".join(retrieved_texts) if retrieved_texts else ""
 
-        # 4) build messages including recent conversation for context
-        recent_messages = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
+        # ---------- 4) build messages including recent conversation for context ----------
+        # include the system prompt + website context (system role) + recent chat messages + current user message
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
         if context_block:
-            messages.append({"role": "system", "content": f"The following website data may help:\n\n{context_block}"})
-        messages.extend(recent_messages)
+            # Keep the context block trimmed to avoid hitting token limits
+            messages.append({"role": "system", "content": f"Website content (only use this to answer):\n\n{trim_context_text(context_block, max_chars=MAX_CONTEXT_CHARS)}"})
+
+        # append the recent chat messages (already in chronological order)
+        # ensure roles are valid (user/assistant/system)
+        for m in last_msgs:
+            role = m["role"]
+            if role not in {"user", "assistant", "system"}:
+                role = "user"
+            messages.append({"role": role, "content": m["content"]})
+
+        # the current user question is the last message
         messages.append({"role": "user", "content": question})
 
+        # Optional: If the messages are very long, keep only the last N items
+        if len(messages) > (CONTEXT_MESSAGES + 5):
+            # preserve system prompts at front and keep last CONTEXT_MESSAGES messages
+            system_msgs = [m for m in messages if m["role"] == "system"]
+            other_msgs = [m for m in messages if m["role"] != "system"]
+            messages = system_msgs + other_msgs[-(CONTEXT_MESSAGES + 3):]
 
-
-        # 5) ask OpenAI
+        # ---------- 5) Ask OpenAI chat completions ----------
         try:
-            completion = client.chat.completions.create(model="gpt-4o-mini", messages=messages, temperature=0.2)
+            # Use a deterministic-ish temperature for factual answers
+            completion = client.chat.completions.create(model="gpt-4o-mini", messages=messages, temperature=0.2, max_tokens=800)
             answer = completion.choices[0].message.content.strip()
         except Exception as e:
-            print("❌ OpenAI completion error:", e)
+            logger.exception("❌ OpenAI completion error:")
             return jsonify({"error": "openai_error"}), 500
 
         # persist assistant reply
@@ -273,9 +336,8 @@ def chat():
                 seen.add(s)
 
         return jsonify({"answer": answer, "sources": unique_sources})
-
     except Exception as e:
-        print("❌ Unexpected /chat error:", e)
+        logger.exception("❌ Unexpected /chat error:")
         return jsonify({"error": "server_error"}), 500
 
 # save chat (full transcript save)
@@ -308,7 +370,7 @@ def save_chat():
 
         return jsonify({"message": "Chat saved successfully!"})
     except Exception as e:
-        print("❌ /save-chat error:", e)
+        logger.exception("❌ /save-chat error:")
         return jsonify({"error": "server_error"}), 500
 
 # Admin endpoints
@@ -330,7 +392,7 @@ def admin_sessions():
             })
         return jsonify(out)
     except Exception as e:
-        print("❌ admin_sessions error:", e)
+        logger.exception("❌ admin_sessions error:")
         return jsonify({"error": "server_error"}), 500
 
 @app.route("/admin/session/<session_id>", methods=["GET"])
@@ -350,10 +412,10 @@ def admin_view_session(session_id):
             "messages": [{"role": m.role, "content": m.content, "time": m.created_at.isoformat()} for m in msgs]
         })
     except Exception as e:
-        print("❌ admin_view_session error:", e)
+        logger.exception("❌ admin_view_session error:")
         return jsonify({"error": "server_error"}), 500
 
 # ---------- Run ----------
 if __name__ == "__main__":
-    # For local testing only; in production use gunicorn: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 2`
+    # For local testing only; in production use gunicorn
     app.run(host="0.0.0.0", port=PORT)
