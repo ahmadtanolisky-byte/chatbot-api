@@ -33,6 +33,7 @@ logger = logging.getLogger("chatbot")
 
 # ---------- Flask App ----------
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGIN}})

@@ -5,6 +5,8 @@ from models import Session, Message
 from utils import save_message, get_recent_messages, trim_context_text, require_basic_auth
 import datetime
 from routes import *
+from flask_cors import CORS
+
 
 
 SYSTEM_PROMPT = (
