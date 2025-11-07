@@ -62,22 +62,34 @@ limiter.init_app(app)
 # ---------- OpenAI & Pinecone clients ----------
 try:
     client = OpenAI(api_key=OPENAI_API_KEY)
-    logger.info("OpenAI client initialized")
+    print("✅ OpenAI client initialized")
 except Exception as e:
-    logger.exception("❌ OpenAI init error:")
+    print("❌ OpenAI init error:", e)
     raise
 
 try:
-    # Initialize pinecone client correctly
-    if PINECONE_ENVIRONMENT:
-        pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
-    else:
-        pinecone.init(api_key=PINECONE_API_KEY)
-    index = pinecone.Index(PINECONE_INDEX_NAME)
-    logger.info("Pinecone client initialized, index loaded: %s", PINECONE_INDEX_NAME)
+    from pinecone import Pinecone, ServerlessSpec
+
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+
+    # Ensure index exists (optional, safety check)
+    existing_indexes = [i.name for i in pc.list_indexes()]
+    if PINECONE_INDEX_NAME not in existing_indexes:
+        print(f"⚠️ Index '{PINECONE_INDEX_NAME}' not found. Creating it automatically...")
+        pc.create_index(
+            name=PINECONE_INDEX_NAME,
+            dimension=1536,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1")  # adjust region as needed
+        )
+
+    index = pc.Index(PINECONE_INDEX_NAME)
+    print(f"✅ Pinecone index '{PINECONE_INDEX_NAME}' initialized successfully")
+
 except Exception as e:
-    logger.exception("❌ Pinecone init error:")
+    print("❌ Pinecone init error:", e)
     raise
+
 
 # ---------- Database models ----------
 class Session(db.Model):
