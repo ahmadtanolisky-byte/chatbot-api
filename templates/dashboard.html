@@ -48,13 +48,14 @@
     const chatMeta = document.getElementById("chatMeta");
 
     // Load all sessions
-    async function loadSessions() {
-      const res = await fetch("/admin/sessions", {
-        headers: { "Authorization": "Basic " + btoa(promptAuth()) }
-      });
-      if (!res.ok) { alert("⚠️ Failed to load sessions"); return; }
-      allSessions = await res.json();
-      renderSessions(allSessions);
+   async function loadSessions() {
+    const res = await fetch("/admin/sessions", { credentials: "include" });
+    if (!res.ok) {
+        alert("⚠️ Unauthorized — please reload and log in again.");
+        return;
+    }
+    allSessions = await res.json();
+    renderSessions(allSessions);
     }
 
     // Ask for credentials once per browser session
