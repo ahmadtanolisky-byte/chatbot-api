@@ -214,15 +214,14 @@ def chat():
         context_block = "\n\n---\n\n".join(retrieved_texts) if retrieved_texts else ""
 
         # 4) build messages including recent conversation for context
+        recent_messages = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         if context_block:
-            messages.append({"role": "system", "content": f"Website content (only use this):\n\n{context_block}"})
-
-        recent = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
-        for m in recent:
-            messages.append({"role": m["role"], "content": m["content"]})
-
+            messages.append({"role": "system", "content": f"The following website data may help:\n\n{context_block}"})
+        messages.extend(recent_messages)
         messages.append({"role": "user", "content": question})
+
+
 
         # 5) ask OpenAI
         try:
