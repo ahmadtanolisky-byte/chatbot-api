@@ -11,6 +11,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
+from flask import render_template
 
 # OpenAI (official python client modern usage)
 from openai import OpenAI
@@ -426,6 +427,15 @@ def admin_view_session(session_id):
     except Exception as e:
         logger.exception("❌ admin_view_session error:")
         return jsonify({"error": "server_error"}), 500
+    
+
+from flask import render_template
+
+@app.route("/admin/dashboard")
+@require_basic_auth
+def admin_dashboard():
+    return render_template("dashboard.html")
+
 
 # ---------- Run ----------
 if __name__ == "__main__":

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat Records Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { colors: { brand: "#2563eb" } } } };
+  </script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-inter">
+  <!-- Header -->
+  <header class="bg-white shadow-sm p-4 flex justify-between items-center sticky top-0 z-10">
+    <h1 class="text-2xl font-bold text-brand">💬 Chat Records Dashboard</h1>
+    <button onclick="loadSessions()" class="bg-brand hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition">
+      Refresh
+    </button>
+  </header>
+
+  <!-- Main Content -->
+  <main class="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+    <!-- Sessions list -->
+    <section class="bg-white rounded-2xl shadow-md overflow-hidden">
+      <div class="p-4 border-b flex justify-between items-center">
+        <input id="search" placeholder="Search name or phone..."
+               class="border border-gray-300 rounded-lg p-2 w-full text-sm"
+               oninput="filterSessions()" />
+      </div>
+      <div id="sessionsList" class="max-h-[80vh] overflow-y-auto divide-y"></div>
+    </section>
+
+    <!-- Messages -->
+    <section class="md:col-span-2 bg-white rounded-2xl shadow-md p-4">
+      <div id="chatHeader" class="border-b pb-2 mb-4">
+        <h2 class="text-xl font-semibold">Select a chat</h2>
+        <p id="chatMeta" class="text-gray-500 text-sm"></p>
+      </div>
+      <div id="messages" class="h-[70vh] overflow-y-auto space-y-3"></div>
+    </section>
+  </main>
+
+  <script>
+    let allSessions = [];
+    const sessionsList = document.getElementById("sessionsList");
+    const messagesDiv = document.getElementById("messages");
+    const chatHeader = document.getElementById("chatHeader");
+    const chatMeta = document.getElementById("chatMeta");
+
+    // Load all sessions
+    async function loadSessions() {
+      const res = await fetch("/admin/sessions", {
+        headers: { "Authorization": "Basic " + btoa(promptAuth()) }
+      });
+      if (!res.ok) { alert("⚠️ Failed to load sessions"); return; }
+      allSessions = await res.json();
+      renderSessions(allSessions);
+    }
+
+    // Ask for credentials once per browser session
+    let cachedAuth = null;
+    function promptAuth() {
+      if (cachedAuth) return cachedAuth;
+      const user = prompt("Username:");
+      const pass = prompt("Password:");
+      cachedAuth = user + ":" + pass;
+      return cachedAuth;
+    }
+
+    function renderSessions(sessions) {
+      sessionsList.innerHTML = sessions.map(s => `
+        <div onclick="loadSession('${s.session_id}')"
+             class="p-4 hover:bg-blue-50 cursor-pointer transition">
+          <div class="font-semibold text-blue-600">${s.name || "Unknown User"}</div>
+          <div class="text-sm text-gray-500">${s.phone || "No phone"}</div>
+          <div class="text-xs text-gray-400 mt-1">${new Date(s.created_at).toLocaleString()}</div>
+          <div class="text-sm mt-1 line-clamp-2 text-gray-600">${s.last_message || ""}</div>
+        </div>
+      `).join("");
+    }
+
+    function filterSessions() {
+      const q = document.getElementById("search").value.toLowerCase();
+      const filtered = allSessions.filter(s =>
+        (s.name || "").toLowerCase().includes(q) ||
+        (s.phone || "").toLowerCase().includes(q)
+      );
+      renderSessions(filtered);
+    }
+
+    async function loadSession(id) {
+      const res = await fetch(`/admin/session/${id}`, {
+        headers: { "Authorization": "Basic " + btoa(cachedAuth || promptAuth()) }
+      });
+      if (!res.ok) { alert("⚠️ Failed to load chat"); return; }
+      const data = await res.json();
+      const s = data.session;
+      chatHeader.querySelector("h2").textContent = `${s.name || "Unknown"} (${s.phone || "N/A"})`;
+      chatMeta.textContent = `From: ${s.page || "Unknown Page"} | Started: ${new Date(s.created_at).toLocaleString()}`;
+      renderMessages(data.messages);
+    }
+
+    function renderMessages(msgs) {
+      messagesDiv.innerHTML = msgs.map(m => `
+        <div class="flex ${m.role === "user" ? "justify-end" : "justify-start"}">
+          <div class="max-w-[70%] p-3 rounded-2xl text-sm ${
+            m.role === "user"
+              ? "bg-blue-500 text-white rounded-br-none"
+              : m.role === "assistant"
+                ? "bg-gray-200 text-gray-800 rounded-bl-none"
+                : "bg-yellow-100 text-gray-700"
+          } shadow-sm">
+            ${m.content.replace(/\n/g, "<br>")}
+            <div class="text-xs mt-1 opacity-70">${new Date(m.time).toLocaleString()}</div>
+          </div>
+        </div>
+      `).join("");
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    loadSessions();
+  </script>
+</body>
+</html>
