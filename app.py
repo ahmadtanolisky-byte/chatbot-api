@@ -190,10 +190,26 @@ def chat():
 
         # 1) create embedding
         try:
-            recent_messages = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
-            context_query = " ".join([m["content"] for m in recent_messages if m["role"] == "user"][-3:]) + " " + question
-            embed_resp = client.embeddings.create(model="text-embedding-3-small", input=context_query)
+            # Combine recent user context with the current question
+            recent_msgs = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
+            context_text = " ".join([
+                m["content"] for m in recent_msgs
+                if m["role"] == "user"
+            ][-3:])  # last 3 user messages
+
+            # If the user is asking something short, enrich it
+            if len(question.split()) < 4:  # e.g. "location", "on cash"
+                context_query = (context_text + " " + question).strip()
+            else:
+                context_query = question
+
+            # Create embedding based on context-aware query
+            embed_resp = client.embeddings.create(
+                model="text-embedding-3-small",
+                input=context_query
+            )
             q_embed = embed_resp.data[0].embedding
+
         except Exception as e:
             print("❌ OpenAI embedding error:", e)
             return jsonify({"error": "embedding_error"}), 500
