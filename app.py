@@ -28,7 +28,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")  # optional
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chats.db")  # replace with Postgres URL in production
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("❌ DATABASE_URL not set! Please add it in Render Environment.")
+
 ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "changeme")
@@ -435,7 +438,9 @@ from flask import render_template
 @require_basic_auth
 def admin_dashboard():
     return render_template("dashboard.html")
-
+@app.route("/db-info")
+def db_info():
+    return {"database_url": app.config["SQLALCHEMY_DATABASE_URI"]}
 
 # ---------- Run ----------
 if __name__ == "__main__":
