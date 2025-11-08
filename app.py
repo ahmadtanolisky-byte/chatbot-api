@@ -153,9 +153,11 @@ def trim_context_text(text: str, max_chars: int = MAX_CONTEXT_CHARS) -> str:
 
 # Strict but practical system prompt (tune as needed)
 SYSTEM_PROMPT = (
-    "You are a helpful assistant for the Faisal Town / Sky Marketing website. "
-    "Answer using only the provided website content and conversation context. "
-    "If you cannot find a direct answer, reply: "
+    "You are a helpful assistant for the Sky Marketing real estate website. "
+    "Answer using ONLY the provided website content and conversation context. "
+    "If the user refers to a block, phase, or society, use the context to determine which one. "
+    "Do NOT assume anything not in context. "
+    "If the answer is not in the context, reply: "
     "'I'm sorry, I don't have that exact information yet. Would you like me to connect you with our sales team?' "
     "Keep answers short, factual, and reference source URLs when appropriate."
 )
@@ -242,13 +244,7 @@ def chat():
         # small list - you can extend with more blocks / project names
         KNOWN_BLOCKS = ["n block", "a block", "b block", "faisal town", "phase 2", "phase ii", "phase 1", "central business district", "cbd"]
 
-        if question.lower() in GENERIC_SHORT_QUERIES or is_short_query(question):
-            for block in KNOWN_BLOCKS:
-                if block in recent_text:
-                    # append the most-likely block to the question (so retrieval improves)
-                    question = f"{question} {block}"
-                    logger.debug("Enriched short question with context: %s", question)
-                    break
+
 
         # ---------- 1) Create context-aware embedding ----------
         try:
