@@ -35,7 +35,7 @@ if not DATABASE_URL:
 ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "changeme")
-TOP_K = int(os.getenv("TOP_K", 8))  # increased recall
+TOP_K = int(os.getenv("TOP_K", 1000))  # increased recall
 CONTEXT_MESSAGES = int(os.getenv("CONTEXT_MESSAGES", 6))
 RATE_LIMIT = os.getenv("RATE_LIMIT", "60 per minute")
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", 3500))  # trim long contexts
