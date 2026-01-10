@@ -55,7 +55,20 @@ logger = logging.getLogger("chatbot")
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGIN}})
+allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGIN", "").split(",") if o.strip()]
+if not allowed_origins:
+    allowed_origins = ["*"]
+
+CORS(
+    app,
+    origins=allowed_origins,
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"]
+)
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        return ("", 200)
 
 db = SQLAlchemy(app)
 
