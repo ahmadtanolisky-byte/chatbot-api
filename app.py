@@ -337,6 +337,7 @@ def chat():
         except Exception as e:
             logger.exception("❌ OpenAI completion error:")
             return jsonify({"error": "openai_error"}), 500
+        
 
         # persist assistant reply
         save_message(session_id, "assistant", answer)
