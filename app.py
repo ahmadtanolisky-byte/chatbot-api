@@ -1,4 +1,3 @@
-# app.py - production-ready chatbot backend (improved)
 import os
 import datetime
 import logging
@@ -13,21 +12,17 @@ from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 from flask import render_template
 
-# OpenAI (official python client modern usage)
 from openai import OpenAI
 
-# Pinecone (use official pinecone-client import)
 import pinecone
 
-# Load environment variables from .env
 load_dotenv()
 
-# ---------- Configuration (from env) ----------
 PORT = int(os.getenv("PORT", 5000))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")  # optional
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT") 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("❌ DATABASE_URL not set! Please add it in Render Environment.")
@@ -35,23 +30,20 @@ if not DATABASE_URL:
 ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "changeme")
-TOP_K = int(os.getenv("TOP_K", 7))  # increased recall
+TOP_K = int(os.getenv("TOP_K", 7)) 
 CONTEXT_MESSAGES = int(os.getenv("CONTEXT_MESSAGES", 6))
 RATE_LIMIT = os.getenv("RATE_LIMIT", "60 per minute")
-MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", 3500))  # trim long contexts
-SHORT_QUERY_WORDS = int(os.getenv("SHORT_QUERY_WORDS", 4))  # treat queries shorter than this as 'short'
+MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", 4500))  
+SHORT_QUERY_WORDS = int(os.getenv("SHORT_QUERY_WORDS", 4))  
 
-# Validate required env vars
 if not OPENAI_API_KEY:
     raise RuntimeError("Please set OPENAI_API_KEY in environment")
 if not PINECONE_API_KEY or not PINECONE_INDEX_NAME:
     raise RuntimeError("Please set PINECONE_API_KEY and PINECONE_INDEX_NAME in environment")
 
-# ---------- Logging ----------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chatbot")
 
-# ---------- Flask + Extensions ----------
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -72,11 +64,9 @@ def handle_preflight():
 
 db = SQLAlchemy(app)
 
-# Flask-Limiter v3 style
 limiter = Limiter(key_func=get_remote_address, default_limits=[RATE_LIMIT])
 limiter.init_app(app)
 
-# ---------- OpenAI & Pinecone clients ----------
 try:
     client = OpenAI(api_key=OPENAI_API_KEY)
     print("✅ OpenAI client initialized")
@@ -89,7 +79,6 @@ try:
 
     pc = Pinecone(api_key=PINECONE_API_KEY)
 
-    # Ensure index exists (optional, safety check)
     existing_indexes = [i.name for i in pc.list_indexes()]
     if PINECONE_INDEX_NAME not in existing_indexes:
         print(f"⚠️ Index '{PINECONE_INDEX_NAME}' not found. Creating it automatically...")
@@ -97,7 +86,7 @@ try:
             name=PINECONE_INDEX_NAME,
             dimension=1536,
             metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1")  # adjust region as needed
+            spec=ServerlessSpec(cloud="aws", region="us-east-1")  
         )
 
     index = pc.Index(PINECONE_INDEX_NAME)
@@ -108,7 +97,6 @@ except Exception as e:
     raise
 
 
-# ---------- Database models ----------
 class Session(db.Model):
     __tablename__ = "sessions"
     id = db.Column(db.Integer, primary_key=True)
@@ -122,15 +110,13 @@ class Message(db.Model):
     __tablename__ = "messages"
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.String(128), db.ForeignKey("sessions.session_id"), index=True)
-    role = db.Column(db.String(32))  # 'user', 'assistant', 'system'
+    role = db.Column(db.String(32))  
     content = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
-# create tables
 with app.app_context():
     db.create_all()
 
-# ---------- Utilities ----------
 def require_basic_auth(func):
     @wraps(func)
     def wrapped(*args, **kwargs):
@@ -142,7 +128,6 @@ def require_basic_auth(func):
 
 def save_message(session_id: str, role: str, content: str):
     try:
-        # don't store extremely long content blindly
         if content and len(content) > 20000:
             content = content[:20000] + "...(truncated)"
         m = Message(session_id=session_id, role=role, content=content)
@@ -153,7 +138,6 @@ def save_message(session_id: str, role: str, content: str):
 
 def get_recent_messages(session_id: str, limit: int = CONTEXT_MESSAGES) -> List[dict]:
     msgs = Message.query.filter_by(session_id=session_id).order_by(Message.id.desc()).limit(limit).all()
-    # return in chronological order as chat format expects oldest -> newest
     return list(reversed([{"role": m.role, "content": m.content} for m in msgs]))
 
 def trim_context_text(text: str, max_chars: int = MAX_CONTEXT_CHARS) -> str:
@@ -161,10 +145,8 @@ def trim_context_text(text: str, max_chars: int = MAX_CONTEXT_CHARS) -> str:
         return ""
     if len(text) <= max_chars:
         return text
-    # keep the last part (most recent)
     return text[-max_chars:]
 
-# Strict but practical system prompt (tune as needed)
 SYSTEM_PROMPT = (
     "You are a helpful assistant for the Sky Marketing real estate website. "
     "Answer using ONLY the provided website content and conversation context. "
@@ -182,7 +164,6 @@ GENERIC_SHORT_QUERIES = {"payment plan", "map", "location", "plots", "details", 
 def is_short_query(q: str) -> bool:
     return len(q.split()) < SHORT_QUERY_WORDS or q.lower() in GENERIC_SHORT_QUERIES
 
-# ---------- Routes ----------
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "ok", "message": "Chatbot API running"})
@@ -191,7 +172,6 @@ def home():
 def healthz():
     return jsonify({"status": "ok"})
 
-# start/update session
 @app.route("/session", methods=["POST"])
 @limiter.limit("10 per minute")
 def start_session():
@@ -220,7 +200,6 @@ def start_session():
         logger.exception("❌ /session error:")
         return jsonify({"error": "server_error"}), 500
 
-# main chat endpoint
 @app.route("/chat", methods=["POST"])
 @limiter.limit(RATE_LIMIT)
 def chat():
@@ -234,13 +213,10 @@ def chat():
         if not question:
             return jsonify({"error": "question required"}), 400
 
-        # Normalize whitespace
         question = " ".join(question.split())
 
-        # save user message
         save_message(session_id, "user", question)
 
-        # quick greetings/fallback handling
         q_lower = question.lower()
         if q_lower in {"hi", "hello", "hey", "salam", "assalamualaikum"}:
             s = Session.query.filter_by(session_id=session_id).first()
@@ -249,31 +225,23 @@ def chat():
             save_message(session_id, "assistant", answer)
             return jsonify({"answer": answer})
 
-        # ---------- Context-aware enrichment ----------
-        # get last few messages and last few user messages
         last_msgs = get_recent_messages(session_id, limit=CONTEXT_MESSAGES)
         last_user_msgs = [m["content"] for m in last_msgs if m["role"] == "user"]
 
-        # try to detect previously mentioned block/area automatically for short/generic queries
         recent_text = " ".join(m["content"].lower() for m in last_msgs)
-        # small list - you can extend with more blocks / project names
         KNOWN_BLOCKS = ["n block", "a block", "b block", "faisal town", "phase 2", "phase ii", "phase 1", "central business district", "cbd"]
 
 
 
-        # ---------- 1) Create context-aware embedding ----------
         try:
-            # Build a short context string from recent user messages (most recent ones matter more)
-            context_text = " ".join(last_user_msgs[-3:])  # use last 3 user messages
+            context_text = " ".join(last_user_msgs[-3:]) 
             context_text = trim_context_text(context_text, max_chars=MAX_CONTEXT_CHARS)
 
-            # If the question is short or ambiguous, combine with recent user context for embedding search
             if is_short_query(question):
                 embedding_input = (context_text + " " + question).strip()
             else:
                 embedding_input = question
 
-            # safety fallback
             if not embedding_input:
                 embedding_input = question
 
@@ -283,30 +251,25 @@ def chat():
             logger.exception("❌ OpenAI embedding error:")
             return jsonify({"error": "embedding_error"}), 500
 
-        # ---------- 2) Pinecone query ----------
         try:
             results = index.query(vector=q_embed, top_k=TOP_K, include_metadata=True)
         except Exception as e:
             logger.exception("❌ Pinecone query error:")
             return jsonify({"error": "pinecone_error"}), 500
 
-        # ---------- 3) collect retrieved context + sources ----------
         retrieved_texts = []
         sources = []
         matches = []
-        # results may be dict-like or object depending on client version
         if hasattr(results, "matches"):
             matches = results.matches or []
         elif isinstance(results, dict) and "matches" in results:
             matches = results["matches"] or []
 
         for m in matches:
-            # metadata can be nested differently in various Pinecone setups; handle multiple shapes
             metadata = getattr(m, "metadata", None) or (m.get("metadata") if isinstance(m, dict) else {}) or {}
             text = metadata.get("text") or metadata.get("content") or metadata.get("page_text") or ""
             url = metadata.get("url") or metadata.get("page") or metadata.get("source") or ""
             if not text:
-                # sometimes the match object itself has a 'value' or 'payload'
                 text = getattr(m, "value", "") or (m.get("payload") if isinstance(m, dict) else "") or ""
             if text:
                 prefix = f"Source: {url}\n" if url else ""
@@ -316,35 +279,25 @@ def chat():
 
         context_block = "\n\n---\n\n".join(retrieved_texts) if retrieved_texts else ""
 
-        # ---------- 4) build messages including recent conversation for context ----------
-        # include the system prompt + website context (system role) + recent chat messages + current user message
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
         if context_block:
-            # Keep the context block trimmed to avoid hitting token limits
             messages.append({"role": "system", "content": f"Website content (only use this to answer):\n\n{trim_context_text(context_block, max_chars=MAX_CONTEXT_CHARS)}"})
 
-        # append the recent chat messages (already in chronological order)
-        # ensure roles are valid (user/assistant/system)
         for m in last_msgs:
             role = m["role"]
             if role not in {"user", "assistant", "system"}:
                 role = "user"
             messages.append({"role": role, "content": m["content"]})
 
-        # the current user question is the last message
         messages.append({"role": "user", "content": question})
 
-        # Optional: If the messages are very long, keep only the last N items
         if len(messages) > (CONTEXT_MESSAGES + 5):
-            # preserve system prompts at front and keep last CONTEXT_MESSAGES messages
             system_msgs = [m for m in messages if m["role"] == "system"]
             other_msgs = [m for m in messages if m["role"] != "system"]
             messages = system_msgs + other_msgs[-(CONTEXT_MESSAGES + 3):]
 
-        # ---------- 5) Ask OpenAI chat completions ----------
         try:
-            # Use a deterministic-ish temperature for factual answers
             completion = client.chat.completions.create(model="gpt-4o-mini", messages=messages, temperature=0.2, max_tokens=800)
             answer = completion.choices[0].message.content.strip()
         except Exception as e:
@@ -352,10 +305,8 @@ def chat():
             return jsonify({"error": "openai_error"}), 500
         
 
-        # persist assistant reply
         save_message(session_id, "assistant", answer)
 
-        # dedupe sources preserving order
         unique_sources = []
         seen = set()
         for s in sources:
@@ -368,7 +319,6 @@ def chat():
         logger.exception("❌ Unexpected /chat error:")
         return jsonify({"error": "server_error"}), 500
 
-# save chat (full transcript save)
 @app.route("/save-chat", methods=["POST"])
 def save_chat():
     try:
@@ -393,7 +343,6 @@ def save_chat():
                 s.page = page
         db.session.commit()
 
-        # Optionally record a 'system' message that contains full transcript snapshot
         save_message(session_id, "system", chat_text)
 
         return jsonify({"message": "Chat saved successfully!"})
@@ -401,7 +350,6 @@ def save_chat():
         logger.exception("❌ /save-chat error:")
         return jsonify({"error": "server_error"}), 500
 
-# Admin endpoints
 @app.route("/admin/sessions", methods=["GET"])
 @require_basic_auth
 def admin_sessions():
@@ -454,7 +402,5 @@ def admin_dashboard():
 def db_info():
     return {"database_url": app.config["SQLALCHEMY_DATABASE_URI"]}
 
-# ---------- Run ----------
 if __name__ == "__main__":
-    # For local testing only; in production use gunicorn
     app.run(host="0.0.0.0", port=PORT)
